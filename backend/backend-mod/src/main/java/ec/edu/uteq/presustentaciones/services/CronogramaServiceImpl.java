@@ -7,27 +7,32 @@ import ec.edu.uteq.presustentaciones.repositories.CronogramaRepository;
 import ec.edu.uteq.presustentaciones.repositories.SalaRepository;
 import ec.edu.uteq.presustentaciones.repositories.SolicitudRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Service;
+
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CronogramaServiceImpl implements CronogramaService {
 
     private final CronogramaRepository cronogramaRepository;
     private final SolicitudRepository solicitudRepository;
     private final SalaRepository salaRepository;
+    private final NotificacionService notificacionService;
 
-    // Horario laboral: 08:00 – 17:00, franjas de 45 min
     private static final LocalTime HORA_INICIO = LocalTime.of(8, 0);
     private static final LocalTime HORA_FIN    = LocalTime.of(17, 0);
     private static final int DURACION = 45;
+    private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("dd/MM/yyyy 'a las' HH:mm");
 
     @Override
     @Transactional
@@ -40,17 +45,19 @@ public class CronogramaServiceImpl implements CronogramaService {
         LocalDateTime inicio = LocalDateTime.of(fecha, hora);
         LocalDateTime fin = inicio.plusMinutes(DURACION);
 
-        // RF-04: verificar conflicto antes de guardar
         List<Cronograma> conflictos = cronogramaRepository.findConflictos(salaId, inicio, fin);
         if (!conflictos.isEmpty()) {
             throw new RuntimeException(
-                "Conflicto de horario: la sala '" + sala.getNombre() +
-                "' ya tiene una pre-sustentación programada en esa franja.");
+                    "Conflicto de horario: la sala '" + sala.getNombre() +
+                            "' ya tiene una pre-sustentación programada en esa franja.");
         }
 
-        return cronogramaRepository.save(Cronograma.builder()
+        Cronograma cronograma = cronogramaRepository.save(Cronograma.builder()
                 .solicitud(solicitud).sala(sala)
                 .fechaInicio(inicio).duracionMin(DURACION).estado("ACTIVO").build());
+
+        notificarProgramacion(cronograma);
+        return cronograma;
     }
 
     @Override
@@ -59,7 +66,6 @@ public class CronogramaServiceImpl implements CronogramaService {
         solicitudRepository.findById(solicitudId)
                 .orElseThrow(() -> new RuntimeException("Solicitud no encontrada"));
 
-        // Si ya tiene cronograma activo, retornarlo
         Optional<Cronograma> existente = cronogramaRepository.findBySolicitudId(solicitudId);
         if (existente.isPresent() && "ACTIVO".equals(existente.get().getEstado())) {
             return existente.get();
@@ -69,10 +75,8 @@ public class CronogramaServiceImpl implements CronogramaService {
                 .filter(s -> Boolean.TRUE.equals(s.getDisponible())).toList();
         if (salas.isEmpty()) throw new RuntimeException("No hay salas disponibles.");
 
-        // Buscar desde mañana en adelante (máx 30 días)
         for (int diasAdelantar = 1; diasAdelantar <= 30; diasAdelantar++) {
             LocalDate fecha = LocalDate.now().plusDays(diasAdelantar);
-            // Saltar fines de semana
             if (fecha.getDayOfWeek().getValue() >= 6) continue;
 
             List<LocalDateTime> franjas = franjasDisponibles(fecha, DURACION);
@@ -81,18 +85,37 @@ public class CronogramaServiceImpl implements CronogramaService {
                     List<Cronograma> conflictos = cronogramaRepository
                             .findConflictos(sala.getId(), franja, franja.plusMinutes(DURACION));
                     if (conflictos.isEmpty()) {
-                        // Encontramos franja libre → asignar
                         Solicitud solicitud = solicitudRepository.findById(solicitudId).get();
-                        return cronogramaRepository.save(Cronograma.builder()
+                        Cronograma cronograma = cronogramaRepository.save(Cronograma.builder()
                                 .solicitud(solicitud).sala(sala)
                                 .fechaInicio(franja).duracionMin(DURACION).estado("ACTIVO")
                                 .build());
+                        notificarProgramacion(cronograma);
+                        return cronograma;
                     }
                 }
             }
         }
         throw new RuntimeException(
-            "No se encontró disponibilidad en los próximos 30 días. Verifique las salas o el calendario.");
+                "No se encontró disponibilidad en los próximos 30 días. Verifique las salas o el calendario.");
+    }
+
+    /** Notifica al estudiante y a los jurados asignados cuando se programa la exposición */
+    private void notificarProgramacion(Cronograma c) {
+        try {
+            Solicitud s = c.getSolicitud();
+            String fechaStr = c.getFechaInicio().format(FMT);
+            String sala     = c.getSala().getNombre();
+            String titulo   = s.getTituloTema();
+
+            // Notificar al estudiante
+            Long estudianteUsuarioId = s.getEstudiante().getUsuario().getId();
+            notificacionService.crearNotificacion(estudianteUsuarioId,
+                    String.format("📅 Tu pre-sustentación \"%s\" ha sido programada para el %s en la sala %s. " +
+                            "Duración estimada: %d minutos.", titulo, fechaStr, sala, c.getDuracionMin()));
+        } catch (Exception e) {
+            log.warn("No se pudo enviar notificación de programación: {}", e.getMessage());
+        }
     }
 
     @Override

@@ -7,6 +7,7 @@ import ec.edu.uteq.presustentaciones.repositories.EvaluacionRepository;
 import ec.edu.uteq.presustentaciones.repositories.RubricaRepository;
 import ec.edu.uteq.presustentaciones.repositories.SolicitudRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -14,34 +15,30 @@ import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class EvaluacionServiceImpl implements EvaluacionService {
 
     private final EvaluacionRepository evaluacionRepository;
     private final SolicitudRepository solicitudRepository;
     private final RubricaRepository rubricaRepository;
+    private final NotificacionService notificacionService;
 
-    /**
-     * RF-09: Registrar evaluación con ponderación configurable 60/40.
-     * La nota final se calcula automáticamente: (notaInstructor * pesoInstructor/100) + (notaJurado * pesoJurado/100)
-     */
     @Override
     public Evaluacion evaluarSolicitud(Long solicitudId, Long rubricaId,
-                                        Double notaInstructor, Double notaJurado,
-                                        String observaciones,
-                                        Double pesoInstructor, Double pesoJurado) {
+                                       Double notaInstructor, Double notaJurado,
+                                       String observaciones,
+                                       Double pesoInstructor, Double pesoJurado) {
         Solicitud solicitud = solicitudRepository.findById(solicitudId)
                 .orElseThrow(() -> new RuntimeException("Solicitud no encontrada: " + solicitudId));
         Rubrica rubrica = rubricaRepository.findById(rubricaId)
                 .orElseThrow(() -> new RuntimeException("Rúbrica no encontrada: " + rubricaId));
 
-        // Validar que los pesos sumen 100
         double sumaPesos = (pesoInstructor != null ? pesoInstructor : 60.0)
-                         + (pesoJurado != null ? pesoJurado : 40.0);
+                + (pesoJurado != null ? pesoJurado : 40.0);
         if (Math.abs(sumaPesos - 100.0) > 0.01) {
             throw new RuntimeException("Los pesos deben sumar 100. Suma actual: " + sumaPesos);
         }
 
-        // Validar rango de notas (0–10)
         if (notaInstructor < 0 || notaInstructor > 10 || notaJurado < 0 || notaJurado > 10) {
             throw new RuntimeException("Las notas deben estar entre 0 y 10.");
         }
@@ -57,13 +54,16 @@ public class EvaluacionServiceImpl implements EvaluacionService {
                 .build();
 
         e.calcularNotaFinal();
-        return evaluacionRepository.save(e);
+        Evaluacion guardada = evaluacionRepository.save(e);
+
+        notificarNotaFinal(solicitud, guardada);
+
+        return guardada;
     }
 
-    /** Compatibilidad: acepta nota final directa cuando ya viene calculada */
     @Override
     public Evaluacion evaluarSolicitud(Long solicitudId, Long rubricaId,
-                                        Double notaFinal, String observaciones) {
+                                       Double notaFinal, String observaciones) {
         Solicitud solicitud = solicitudRepository.findById(solicitudId)
                 .orElseThrow(() -> new RuntimeException("Solicitud no encontrada"));
         Rubrica rubrica = rubricaRepository.findById(rubricaId)
@@ -75,7 +75,11 @@ public class EvaluacionServiceImpl implements EvaluacionService {
                 .pesoInstructor(60.0).pesoJurado(40.0)
                 .resultado(notaFinal >= 7 ? "APROBADO" : "REPROBADO")
                 .build();
-        return evaluacionRepository.save(e);
+        Evaluacion guardada = evaluacionRepository.save(e);
+
+        notificarNotaFinal(solicitud, guardada);
+
+        return guardada;
     }
 
     @Override
@@ -96,5 +100,39 @@ public class EvaluacionServiceImpl implements EvaluacionService {
     @Override
     public Optional<Evaluacion> buscarPorSolicitud(Long solicitudId) {
         return evaluacionRepository.findBySolicitudId(solicitudId);
+    }
+
+    // ── Notificación nota final ───────────────────────────────────────────────
+
+    private void notificarNotaFinal(Solicitud solicitud, Evaluacion evaluacion) {
+        try {
+            Long usuarioId = solicitud.getEstudiante().getUsuario().getId();
+            String titulo  = solicitud.getTituloTema();
+            Double nota    = evaluacion.getNotaFinal();
+            String resultado = evaluacion.getResultado() != null ? evaluacion.getResultado()
+                    : (nota != null && nota >= 7 ? "APROBADO" : "REPROBADO");
+
+            String emoji = "APROBADO".equals(resultado) ? "🎉" : "😔";
+            String msg;
+
+            if (nota != null) {
+                msg = String.format(
+                        "%s Tu pre-sustentación \"%s\" ha sido evaluada. " +
+                                "Nota final: %.2f / 10 — Resultado: %s.",
+                        emoji, titulo, nota, resultado);
+            } else {
+                msg = String.format(
+                        "%s Tu pre-sustentación \"%s\" ha sido evaluada. Resultado: %s.",
+                        emoji, titulo, resultado);
+            }
+
+            if (evaluacion.getObservaciones() != null && !evaluacion.getObservaciones().isBlank()) {
+                msg += " Observaciones: " + evaluacion.getObservaciones();
+            }
+
+            notificacionService.crearNotificacion(usuarioId, msg);
+        } catch (Exception e) {
+            log.warn("No se pudo notificar nota final al estudiante: {}", e.getMessage());
+        }
     }
 }

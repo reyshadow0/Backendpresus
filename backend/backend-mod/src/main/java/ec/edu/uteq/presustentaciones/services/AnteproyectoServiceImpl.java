@@ -2,8 +2,11 @@ package ec.edu.uteq.presustentaciones.services;
 
 import ec.edu.uteq.presustentaciones.entities.Anteproyecto;
 import ec.edu.uteq.presustentaciones.entities.Solicitud;
+import ec.edu.uteq.presustentaciones.entities.Usuario;
 import ec.edu.uteq.presustentaciones.repositories.AnteproyectoRepository;
 import ec.edu.uteq.presustentaciones.repositories.SolicitudRepository;
+import ec.edu.uteq.presustentaciones.repositories.UsuarioRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -19,21 +22,28 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 @Service
+@Slf4j
 public class AnteproyectoServiceImpl implements AnteproyectoService {
 
     private final AnteproyectoRepository anteproyectoRepository;
     private final SolicitudRepository solicitudRepository;
+    private final NotificacionService notificacionService;
+    private final UsuarioRepository usuarioRepository;
 
     @Value("${app.upload.dir:uploads/anteproyectos}")
     private String uploadDir;
 
-    public AnteproyectoServiceImpl(AnteproyectoRepository ar, SolicitudRepository sr) {
+    public AnteproyectoServiceImpl(AnteproyectoRepository ar, SolicitudRepository sr,
+                                   NotificacionService ns, UsuarioRepository ur) {
         this.anteproyectoRepository = ar;
         this.solicitudRepository = sr;
+        this.notificacionService = ns;
+        this.usuarioRepository = ur;
     }
 
     @Override
@@ -48,22 +58,16 @@ public class AnteproyectoServiceImpl implements AnteproyectoService {
 
         String nombreArchivo = "solicitud_" + solicitudId + "_" + UUID.randomUUID() + ".pdf";
         Path rutaArchivo = dirPath.resolve(nombreArchivo);
-
-        // RF-02: Calcular SHA-256 mientras se guarda el archivo (un solo pass)
         String sha256 = calcularSha256YGuardar(archivo, rutaArchivo);
 
-        // Buscar anteproyecto existente
         Anteproyecto anteproyecto = anteproyectoRepository
-                .findBySolicitudId(solicitudId)
-                .orElse(null);
+                .findBySolicitudId(solicitudId).orElse(null);
 
-        // Bloquear re-subida: solo se permite si no existe PDF previo
-        // o si el coordinador rechazó el anterior (estado = RECHAZADO)
         if (anteproyecto != null
                 && anteproyecto.getArchivoPdf() != null
                 && !"RECHAZADO".equals(anteproyecto.getEstado())) {
             throw new RuntimeException(
-                "No puedes reemplazar el PDF. El coordinador debe rechazar el anteproyecto para permitir una nueva carga.");
+                    "No puedes reemplazar el PDF. El coordinador debe rechazar el anteproyecto para permitir una nueva carga.");
         }
 
         if (anteproyecto == null) anteproyecto = new Anteproyecto();
@@ -75,10 +79,14 @@ public class AnteproyectoServiceImpl implements AnteproyectoService {
         anteproyecto.setSha256Hash(sha256);
         anteproyecto.setTamanoBytes(archivo.getSize());
 
-        return anteproyectoRepository.save(anteproyecto);
+        Anteproyecto guardado = anteproyectoRepository.save(anteproyecto);
+
+        // Notificar a los admins que hay un anteproyecto nuevo para revisar
+        notificarAdminsNuevoAnteproyecto(solicitud);
+
+        return guardado;
     }
 
-    /** Guarda el archivo y computa el hash SHA-256 en un solo paso */
     private String calcularSha256YGuardar(MultipartFile archivo, Path destino) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -92,7 +100,6 @@ public class AnteproyectoServiceImpl implements AnteproyectoService {
         }
     }
 
-    /** RF-02: Verificar integridad — recalcula el hash del archivo en disco y compara */
     @Override
     public boolean verificarIntegridad(Long solicitudId) {
         Anteproyecto ap = anteproyectoRepository.findBySolicitudId(solicitudId)
@@ -115,20 +122,71 @@ public class AnteproyectoServiceImpl implements AnteproyectoService {
     public Anteproyecto aprobarAnteproyecto(Long id, String obs) {
         Anteproyecto ap = anteproyectoRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Anteproyecto no encontrado"));
-        ap.setEstado("APROBADO"); ap.setObservaciones(obs);
-        return anteproyectoRepository.save(ap);
+        ap.setEstado("APROBADO");
+        ap.setObservaciones(obs);
+        Anteproyecto guardado = anteproyectoRepository.save(ap);
+
+        // Notificar al estudiante
+        notificarEstudianteAnteproyecto(ap, true, obs);
+
+        return guardado;
     }
 
     @Override
     public Anteproyecto rechazarAnteproyecto(Long id, String obs) {
         Anteproyecto ap = anteproyectoRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Anteproyecto no encontrado"));
-        ap.setEstado("RECHAZADO"); ap.setObservaciones(obs);
-        return anteproyectoRepository.save(ap);
+        ap.setEstado("RECHAZADO");
+        ap.setObservaciones(obs);
+        Anteproyecto guardado = anteproyectoRepository.save(ap);
+
+        // Notificar al estudiante
+        notificarEstudianteAnteproyecto(ap, false, obs);
+
+        return guardado;
     }
 
     @Override
     public Optional<Anteproyecto> buscarPorSolicitud(Long solicitudId) {
         return anteproyectoRepository.findBySolicitudId(solicitudId);
+    }
+
+    // ── Helpers de notificación ───────────────────────────────────────────────
+
+    private void notificarAdminsNuevoAnteproyecto(Solicitud solicitud) {
+        try {
+            List<Usuario> admins = usuarioRepository.findByRol("ADMIN");
+            String nombreEst = solicitud.getEstudiante().getUsuario().getNombre()
+                    + " " + solicitud.getEstudiante().getUsuario().getApellido();
+            for (Usuario admin : admins) {
+                notificacionService.crearNotificacion(admin.getId(),
+                        String.format("📄 El estudiante %s ha subido el PDF del anteproyecto \"%s\". " +
+                                        "Está pendiente de revisión y aprobación.",
+                                nombreEst, solicitud.getTituloTema()));
+            }
+        } catch (Exception e) {
+            log.warn("No se pudo notificar a admins sobre nuevo anteproyecto: {}", e.getMessage());
+        }
+    }
+
+    private void notificarEstudianteAnteproyecto(Anteproyecto ap, boolean aprobado, String obs) {
+        try {
+            Long usuarioId = ap.getSolicitud().getEstudiante().getUsuario().getId();
+            String titulo  = ap.getSolicitud().getTituloTema();
+            String msg;
+            if (aprobado) {
+                msg = String.format("✅ Tu anteproyecto \"%s\" ha sido APROBADO. " +
+                        "Ya puedes proceder con el siguiente paso del proceso.", titulo);
+            } else {
+                msg = String.format("❌ Tu anteproyecto \"%s\" ha sido RECHAZADO. " +
+                        "Debes corregirlo y volver a cargarlo.", titulo);
+            }
+            if (obs != null && !obs.isBlank()) {
+                msg += " Observaciones del coordinador: " + obs;
+            }
+            notificacionService.crearNotificacion(usuarioId, msg);
+        } catch (Exception e) {
+            log.warn("No se pudo notificar al estudiante sobre anteproyecto: {}", e.getMessage());
+        }
     }
 }

@@ -9,6 +9,7 @@ import ec.edu.uteq.presustentaciones.repositories.JuradoRepository;
 import ec.edu.uteq.presustentaciones.repositories.SolicitudRepository;
 import ec.edu.uteq.presustentaciones.repositories.TutorRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,12 +20,14 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class JuradoServiceImpl implements JuradoService {
 
     private final JuradoRepository juradoRepository;
     private final TutorRepository tutorRepository;
     private final DocenteRepository docenteRepository;
     private final SolicitudRepository solicitudRepository;
+    private final NotificacionService notificacionService;
 
     // ── Jurados ───────────────────────────────────────────────────────────────
 
@@ -36,20 +39,17 @@ public class JuradoServiceImpl implements JuradoService {
         Docente docente = docenteRepository.findById(docenteId)
                 .orElseThrow(() -> new RuntimeException("Docente no encontrado: " + docenteId));
 
-        // Verificar que el docente no esté ya asignado como jurado en esta solicitud
         boolean yaAsignado = juradoRepository.findBySolicitudId(solicitudId).stream()
                 .anyMatch(j -> j.getDocente().getId().equals(docenteId));
         if (yaAsignado) {
             throw new RuntimeException("El docente ya está asignado como jurado en esta solicitud.");
         }
 
-        // Verificar rol válido
         List<String> rolesValidos = List.of("PRESIDENTE", "VOCAL_1", "VOCAL_2");
         if (!rolesValidos.contains(rol.toUpperCase())) {
             throw new RuntimeException("Rol inválido. Use: PRESIDENTE, VOCAL_1 o VOCAL_2");
         }
 
-        // Verificar que el rol no esté ocupado
         boolean rolOcupado = juradoRepository.findBySolicitudId(solicitudId).stream()
                 .anyMatch(j -> j.getRol().equalsIgnoreCase(rol));
         if (rolOcupado) {
@@ -63,11 +63,18 @@ public class JuradoServiceImpl implements JuradoService {
                 .confirmado(false)
                 .build();
 
-        // Incrementar carga horaria del docente
         docente.setCargaHorariaSemanal(docente.getCargaHorariaSemanal() + 1);
         docenteRepository.save(docente);
 
-        return juradoRepository.save(jurado);
+        Jurado guardado = juradoRepository.save(jurado);
+
+        // Notificar al docente asignado como jurado
+        notificarDocenteJurado(docente, solicitud, rol);
+
+        // Notificar al estudiante que se le asignó un jurado
+        notificarEstudianteJurado(solicitud, docente, rol);
+
+        return guardado;
     }
 
     @Override
@@ -85,7 +92,6 @@ public class JuradoServiceImpl implements JuradoService {
     public void eliminarJurado(Long juradoId) {
         Jurado jurado = juradoRepository.findById(juradoId)
                 .orElseThrow(() -> new RuntimeException("Jurado no encontrado: " + juradoId));
-        // Decrementar carga
         Docente docente = jurado.getDocente();
         int nuevaCarga = Math.max(0, docente.getCargaHorariaSemanal() - 1);
         docente.setCargaHorariaSemanal(nuevaCarga);
@@ -103,7 +109,6 @@ public class JuradoServiceImpl implements JuradoService {
         Docente docente = docenteRepository.findById(docenteId)
                 .orElseThrow(() -> new RuntimeException("Docente no encontrado: " + docenteId));
 
-        // Si ya existe tutor, reemplazarlo
         tutorRepository.findBySolicitudId(solicitudId).ifPresent(t -> {
             t.setEstado("REEMPLAZADO");
             tutorRepository.save(t);
@@ -114,7 +119,15 @@ public class JuradoServiceImpl implements JuradoService {
                 .docente(docente)
                 .estado("ACTIVO")
                 .build();
-        return tutorRepository.save(tutor);
+        Tutor guardado = tutorRepository.save(tutor);
+
+        // Notificar al docente asignado como tutor
+        notificarDocenteTutor(docente, solicitud);
+
+        // Notificar al estudiante que tiene tutor asignado
+        notificarEstudianteTutor(solicitud, docente);
+
+        return guardado;
     }
 
     @Override
@@ -133,20 +146,17 @@ public class JuradoServiceImpl implements JuradoService {
 
     @Override
     public List<Docente> sugerirDocentes(Long solicitudId, int cantidad) {
-        // Obtener docentes ya asignados en esta solicitud (jurados + tutor)
         List<Long> idsOcupados = new ArrayList<>();
         juradoRepository.findBySolicitudId(solicitudId)
                 .forEach(j -> idsOcupados.add(j.getDocente().getId()));
         tutorRepository.findBySolicitudId(solicitudId)
                 .ifPresent(t -> idsOcupados.add(t.getDocente().getId()));
 
-        // Intentar primero con disponible=true, si no hay suficientes usar todos
         List<Docente> candidatos = docenteRepository.findDisponiblesOrdenadosPorCarga().stream()
                 .filter(d -> !idsOcupados.contains(d.getId()))
                 .collect(Collectors.toList());
 
         if (candidatos.size() < cantidad) {
-            // Fallback: usar todos los docentes ordenados por carga
             candidatos = docenteRepository.findTodosOrdenadosPorCarga().stream()
                     .filter(d -> !idsOcupados.contains(d.getId()))
                     .collect(Collectors.toList());
@@ -158,21 +168,19 @@ public class JuradoServiceImpl implements JuradoService {
     @Override
     @Transactional
     public void asignarJuradosAutomaticamente(Long solicitudId) {
-        // Excluir roles ya asignados
         List<String> rolesOcupados = juradoRepository.findBySolicitudId(solicitudId)
                 .stream().map(Jurado::getRol).collect(Collectors.toList());
         List<String> rolesFaltantes = new ArrayList<>(List.of("PRESIDENTE", "VOCAL_1", "VOCAL_2"))
                 .stream().filter(r -> !rolesOcupados.contains(r)).collect(Collectors.toList());
 
-        if (rolesFaltantes.isEmpty()) return; // ya completo
+        if (rolesFaltantes.isEmpty()) return;
 
         List<Docente> sugeridos = sugerirDocentes(solicitudId, rolesFaltantes.size());
 
         if (sugeridos.size() < rolesFaltantes.size()) {
             throw new RuntimeException(
-                "No hay suficientes docentes para asignar automáticamente. " +
-                "Disponibles: " + sugeridos.size() + ", requeridos: " + rolesFaltantes.size()
-            );
+                    "No hay suficientes docentes para asignar automáticamente. " +
+                            "Disponibles: " + sugeridos.size() + ", requeridos: " + rolesFaltantes.size());
         }
 
         for (int i = 0; i < rolesFaltantes.size(); i++) {
@@ -188,5 +196,72 @@ public class JuradoServiceImpl implements JuradoService {
     @Override
     public List<Tutor> listarTutoriasPorDocente(Long docenteId) {
         return tutorRepository.findByDocenteId(docenteId);
+    }
+
+    // ── Helpers de notificación ───────────────────────────────────────────────
+
+    private void notificarDocenteJurado(Docente docente, Solicitud solicitud, String rol) {
+        try {
+            String rolLabel = switch (rol.toUpperCase()) {
+                case "PRESIDENTE" -> "Presidente del tribunal";
+                case "VOCAL_1"    -> "Vocal 1 del tribunal";
+                case "VOCAL_2"    -> "Vocal 2 del tribunal";
+                default           -> rol;
+            };
+            notificacionService.crearNotificacion(docente.getUsuario().getId(),
+                    String.format("⚖️ Has sido asignado como %s para evaluar la pre-sustentación \"%s\" " +
+                                    "del estudiante %s %s. Por favor ingresa al sistema para confirmar tu participación.",
+                            rolLabel,
+                            solicitud.getTituloTema(),
+                            solicitud.getEstudiante().getUsuario().getNombre(),
+                            solicitud.getEstudiante().getUsuario().getApellido()));
+        } catch (Exception e) {
+            log.warn("No se pudo notificar al docente jurado: {}", e.getMessage());
+        }
+    }
+
+    private void notificarEstudianteJurado(Solicitud solicitud, Docente docente, String rol) {
+        try {
+            String rolLabel = switch (rol.toUpperCase()) {
+                case "PRESIDENTE" -> "Presidente";
+                case "VOCAL_1"    -> "Vocal 1";
+                case "VOCAL_2"    -> "Vocal 2";
+                default           -> rol;
+            };
+            notificacionService.crearNotificacion(solicitud.getEstudiante().getUsuario().getId(),
+                    String.format("👨‍🏫 Se ha asignado al docente %s %s como %s del tribunal para tu pre-sustentación \"%s\".",
+                            docente.getUsuario().getNombre(),
+                            docente.getUsuario().getApellido(),
+                            rolLabel,
+                            solicitud.getTituloTema()));
+        } catch (Exception e) {
+            log.warn("No se pudo notificar al estudiante sobre jurado: {}", e.getMessage());
+        }
+    }
+
+    private void notificarDocenteTutor(Docente docente, Solicitud solicitud) {
+        try {
+            notificacionService.crearNotificacion(docente.getUsuario().getId(),
+                    String.format("📚 Has sido asignado como tutor del anteproyecto \"%s\" " +
+                                    "del estudiante %s %s. Ingresa al sistema para revisar los detalles.",
+                            solicitud.getTituloTema(),
+                            solicitud.getEstudiante().getUsuario().getNombre(),
+                            solicitud.getEstudiante().getUsuario().getApellido()));
+        } catch (Exception e) {
+            log.warn("No se pudo notificar al docente tutor: {}", e.getMessage());
+        }
+    }
+
+    private void notificarEstudianteTutor(Solicitud solicitud, Docente docente) {
+        try {
+            notificacionService.crearNotificacion(solicitud.getEstudiante().getUsuario().getId(),
+                    String.format("🎓 El docente %s %s ha sido asignado como tu tutor para el anteproyecto \"%s\". " +
+                                    "Puedes ponerte en contacto con él a través del sistema.",
+                            docente.getUsuario().getNombre(),
+                            docente.getUsuario().getApellido(),
+                            solicitud.getTituloTema()));
+        } catch (Exception e) {
+            log.warn("No se pudo notificar al estudiante sobre tutor: {}", e.getMessage());
+        }
     }
 }
