@@ -28,6 +28,7 @@ public class JuradoServiceImpl implements JuradoService {
     private final DocenteRepository docenteRepository;
     private final SolicitudRepository solicitudRepository;
     private final NotificacionService notificacionService;
+    private final EmailService emailService;
 
     // ── Jurados ───────────────────────────────────────────────────────────────
 
@@ -38,6 +39,15 @@ public class JuradoServiceImpl implements JuradoService {
                 .orElseThrow(() -> new RuntimeException("Solicitud no encontrada: " + solicitudId));
         Docente docente = docenteRepository.findById(docenteId)
                 .orElseThrow(() -> new RuntimeException("Docente no encontrado: " + docenteId));
+
+        // Validar que la tutoría esté COMPLETADA antes de asignar tribunal
+        Tutor tutor = tutorRepository.findBySolicitudId(solicitudId)
+                .orElseThrow(() -> new RuntimeException(
+                        "No puedes asignar tribunal: esta solicitud no tiene tutor asignado"));
+        if (!"COMPLETADA".equals(tutor.getEstado())) {
+            throw new RuntimeException(
+                    "No puedes asignar tribunal: la tutoría aún no ha completado las 3 revisiones obligatorias");
+        }
 
         boolean yaAsignado = juradoRepository.findBySolicitudId(solicitudId).stream()
                 .anyMatch(j -> j.getDocente().getId().equals(docenteId));
@@ -56,17 +66,7 @@ public class JuradoServiceImpl implements JuradoService {
             throw new RuntimeException("El rol '" + rol + "' ya está asignado en esta solicitud.");
         }
 
-        Jurado jurado = Jurado.builder()
-                .solicitud(solicitud)
-                .docente(docente)
-                .rol(rol.toUpperCase())
-                .confirmado(false)
-                .build();
-
-        docente.setCargaHorariaSemanal(docente.getCargaHorariaSemanal() + 1);
-        docenteRepository.save(docente);
-
-        Jurado guardado = juradoRepository.save(jurado);
+        Jurado guardado = crearJuradoSinNotificar(solicitud, docente, rol);
 
         // Notificar al docente asignado como jurado
         notificarDocenteJurado(docente, solicitud, rol);
@@ -109,17 +109,15 @@ public class JuradoServiceImpl implements JuradoService {
         Docente docente = docenteRepository.findById(docenteId)
                 .orElseThrow(() -> new RuntimeException("Docente no encontrado: " + docenteId));
 
-        tutorRepository.findBySolicitudId(solicitudId).ifPresent(t -> {
-            t.setEstado("REEMPLAZADO");
-            tutorRepository.save(t);
-        });
+        Tutor tutor = tutorRepository.findBySolicitudId(solicitudId)
+                .orElse(Tutor.builder().solicitud(solicitud).build());
 
-        Tutor tutor = Tutor.builder()
-                .solicitud(solicitud)
-                .docente(docente)
-                .estado("ACTIVO")
-                .build();
-        Tutor guardado = tutorRepository.save(tutor);
+        tutor.setDocente(docente);
+        tutor.setEstado("ACTIVO");
+
+        // Re-fetch tras save para garantizar que todas las asociaciones estén cargadas
+        Tutor guardado = tutorRepository.findById(tutorRepository.save(tutor).getId())
+                .orElseThrow(() -> new RuntimeException("Error al recuperar el tutor guardado"));
 
         // Notificar al docente asignado como tutor
         notificarDocenteTutor(docente, solicitud);
@@ -168,6 +166,18 @@ public class JuradoServiceImpl implements JuradoService {
     @Override
     @Transactional
     public void asignarJuradosAutomaticamente(Long solicitudId) {
+        // Validar tutoría completada (asignarJurado ya no se llama, validamos aquí)
+        Tutor tutor = tutorRepository.findBySolicitudId(solicitudId)
+                .orElseThrow(() -> new RuntimeException(
+                        "No puedes asignar tribunal: esta solicitud no tiene tutor asignado"));
+        if (!"COMPLETADA".equals(tutor.getEstado())) {
+            throw new RuntimeException(
+                    "No puedes asignar tribunal: la tutoría aún no ha completado las 3 revisiones obligatorias");
+        }
+
+        Solicitud solicitud = solicitudRepository.findById(solicitudId)
+                .orElseThrow(() -> new RuntimeException("Solicitud no encontrada: " + solicitudId));
+
         List<String> rolesOcupados = juradoRepository.findBySolicitudId(solicitudId)
                 .stream().map(Jurado::getRol).collect(Collectors.toList());
         List<String> rolesFaltantes = new ArrayList<>(List.of("PRESIDENTE", "VOCAL_1", "VOCAL_2"))
@@ -176,16 +186,23 @@ public class JuradoServiceImpl implements JuradoService {
         if (rolesFaltantes.isEmpty()) return;
 
         List<Docente> sugeridos = sugerirDocentes(solicitudId, rolesFaltantes.size());
-
         if (sugeridos.size() < rolesFaltantes.size()) {
             throw new RuntimeException(
                     "No hay suficientes docentes para asignar automáticamente. " +
                             "Disponibles: " + sugeridos.size() + ", requeridos: " + rolesFaltantes.size());
         }
 
+        // Asignar sin notificar al estudiante en cada iteración
         for (int i = 0; i < rolesFaltantes.size(); i++) {
-            asignarJurado(solicitudId, sugeridos.get(i).getId(), rolesFaltantes.get(i));
+            Docente docente = sugeridos.get(i);
+            String rol = rolesFaltantes.get(i);
+            crearJuradoSinNotificar(solicitud, docente, rol);
+            notificarDocenteJurado(docente, solicitud, rol);  // cada docente es destinatario distinto
         }
+
+        // Una sola notificación + correo agrupado al estudiante
+        List<Jurado> todosJurados = juradoRepository.findBySolicitudId(solicitudId);
+        notificarEstudianteTribunalCompleto(solicitud, todosJurados);
     }
 
     @Override
@@ -196,6 +213,51 @@ public class JuradoServiceImpl implements JuradoService {
     @Override
     public List<Tutor> listarTutoriasPorDocente(Long docenteId) {
         return tutorRepository.findByDocenteId(docenteId);
+    }
+
+    // ── Helpers internos ─────────────────────────────────────────────────────
+
+    /** Guarda el jurado y actualiza la carga del docente. No envía ninguna notificación. */
+    private Jurado crearJuradoSinNotificar(Solicitud solicitud, Docente docente, String rol) {
+        docente.setCargaHorariaSemanal(docente.getCargaHorariaSemanal() + 1);
+        docenteRepository.save(docente);
+        return juradoRepository.save(Jurado.builder()
+                .solicitud(solicitud)
+                .docente(docente)
+                .rol(rol.toUpperCase())
+                .confirmado(false)
+                .build());
+    }
+
+    /** Una sola notificación en BD + un solo correo al estudiante con el tribunal completo. */
+    private void notificarEstudianteTribunalCompleto(Solicitud solicitud, List<Jurado> jurados) {
+        try {
+            String presidente = jurados.stream().filter(j -> "PRESIDENTE".equals(j.getRol()))
+                    .map(j -> j.getDocente().getUsuario().getNombre() + " " + j.getDocente().getUsuario().getApellido())
+                    .findFirst().orElse("-");
+            String vocal1 = jurados.stream().filter(j -> "VOCAL_1".equals(j.getRol()))
+                    .map(j -> j.getDocente().getUsuario().getNombre() + " " + j.getDocente().getUsuario().getApellido())
+                    .findFirst().orElse("-");
+            String vocal2 = jurados.stream().filter(j -> "VOCAL_2".equals(j.getRol()))
+                    .map(j -> j.getDocente().getUsuario().getNombre() + " " + j.getDocente().getUsuario().getApellido())
+                    .findFirst().orElse("-");
+
+            String mensaje = String.format(
+                    "⚖️ Se ha asignado tu tribunal completo para tu pre-sustentación \"%s\". " +
+                    "Presidente: %s, Vocal 1: %s, Vocal 2: %s.",
+                    solicitud.getTituloTema(), presidente, vocal1, vocal2);
+
+            Long estudianteUsuarioId = solicitud.getEstudiante().getUsuario().getId();
+            notificacionService.crearNotificacion(estudianteUsuarioId, mensaje);
+
+            String email = solicitud.getEstudiante().getUsuario().getEmailNotificaciones();
+            if (email == null || email.isBlank()) {
+                email = solicitud.getEstudiante().getUsuario().getEmail();
+            }
+            emailService.enviarNotificacion(email, mensaje);
+        } catch (Exception e) {
+            log.warn("No se pudo notificar al estudiante sobre tribunal completo: {}", e.getMessage());
+        }
     }
 
     // ── Helpers de notificación ───────────────────────────────────────────────

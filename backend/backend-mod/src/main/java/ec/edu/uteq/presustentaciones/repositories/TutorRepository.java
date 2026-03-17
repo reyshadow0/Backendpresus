@@ -12,4 +12,7 @@ public interface TutorRepository extends JpaRepository<Tutor, Long> {
     Optional<Tutor> findBySolicitudId(Long solicitudId);
     List<Tutor> findByDocenteId(Long docenteId);
     long countByDocenteIdAndEstado(Long docenteId, String estado);
+
+    List<Tutor> findBySolicitudEstudianteUsuarioId(Long usuarioId);
+    List<Tutor> findByDocenteUsuarioId(Long usuarioId);
 }

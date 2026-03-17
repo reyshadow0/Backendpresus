@@ -39,6 +39,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers("/api/tutorias/fases/*/pdf").permitAll()
                         .requestMatchers("/api/solicitudes/**").authenticated()
                         .requestMatchers("/api/anteproyectos/**").authenticated()
                         .requestMatchers("/api/cronogramas/**").authenticated()

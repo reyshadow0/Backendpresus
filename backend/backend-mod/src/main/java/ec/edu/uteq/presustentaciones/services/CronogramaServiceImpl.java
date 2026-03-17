@@ -1,11 +1,15 @@
 package ec.edu.uteq.presustentaciones.services;
 
 import ec.edu.uteq.presustentaciones.entities.Cronograma;
+import ec.edu.uteq.presustentaciones.entities.Jurado;
 import ec.edu.uteq.presustentaciones.entities.Sala;
 import ec.edu.uteq.presustentaciones.entities.Solicitud;
+import ec.edu.uteq.presustentaciones.entities.Tutor;
 import ec.edu.uteq.presustentaciones.repositories.CronogramaRepository;
+import ec.edu.uteq.presustentaciones.repositories.JuradoRepository;
 import ec.edu.uteq.presustentaciones.repositories.SalaRepository;
 import ec.edu.uteq.presustentaciones.repositories.SolicitudRepository;
+import ec.edu.uteq.presustentaciones.repositories.TutorRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +31,8 @@ public class CronogramaServiceImpl implements CronogramaService {
     private final CronogramaRepository cronogramaRepository;
     private final SolicitudRepository solicitudRepository;
     private final SalaRepository salaRepository;
+    private final JuradoRepository juradoRepository;
+    private final TutorRepository tutorRepository;
     private final NotificacionService notificacionService;
 
     private static final LocalTime HORA_INICIO = LocalTime.of(8, 0);
@@ -37,6 +43,8 @@ public class CronogramaServiceImpl implements CronogramaService {
     @Override
     @Transactional
     public Cronograma crearCronograma(Long solicitudId, Long salaId, LocalDate fecha, LocalTime hora) {
+        validarPrerequisitosParaCronograma(solicitudId);
+
         Solicitud solicitud = solicitudRepository.findById(solicitudId)
                 .orElseThrow(() -> new RuntimeException("Solicitud no encontrada"));
         Sala sala = salaRepository.findById(salaId)
@@ -63,6 +71,8 @@ public class CronogramaServiceImpl implements CronogramaService {
     @Override
     @Transactional
     public Cronograma asignarAutomatico(Long solicitudId) {
+        validarPrerequisitosParaCronograma(solicitudId);
+
         solicitudRepository.findById(solicitudId)
                 .orElseThrow(() -> new RuntimeException("Solicitud no encontrada"));
 
@@ -98,6 +108,29 @@ public class CronogramaServiceImpl implements CronogramaService {
         }
         throw new RuntimeException(
                 "No se encontró disponibilidad en los próximos 30 días. Verifique las salas o el calendario.");
+    }
+
+    private void validarPrerequisitosParaCronograma(Long solicitudId) {
+        // 1. Tribunal completo: los 3 roles deben estar asignados
+        List<String> rolesAsignados = juradoRepository.findBySolicitudId(solicitudId)
+                .stream().map(Jurado::getRol).toList();
+        boolean tribunalCompleto = rolesAsignados.contains("PRESIDENTE")
+                && rolesAsignados.contains("VOCAL_1")
+                && rolesAsignados.contains("VOCAL_2");
+        if (!tribunalCompleto) {
+            throw new RuntimeException(
+                    "No se puede programar la presentación: el tribunal no está completo. " +
+                    "Se requieren Presidente, Vocal 1 y Vocal 2.");
+        }
+
+        // 2. Tutoría COMPLETADA
+        Tutor tutor = tutorRepository.findBySolicitudId(solicitudId)
+                .orElseThrow(() -> new RuntimeException(
+                        "No se puede programar la presentación: la tutoría no ha sido completada."));
+        if (!"COMPLETADA".equals(tutor.getEstado())) {
+            throw new RuntimeException(
+                    "No se puede programar la presentación: la tutoría no ha sido completada.");
+        }
     }
 
     /** Notifica al estudiante y a los jurados asignados cuando se programa la exposición */
