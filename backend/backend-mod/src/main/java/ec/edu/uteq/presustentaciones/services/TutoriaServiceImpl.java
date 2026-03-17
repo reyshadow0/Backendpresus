@@ -37,18 +37,24 @@ public class TutoriaServiceImpl implements TutoriaService {
     private final TutoriaFaseRepository tutoriaFaseRepository;
     private final TutoriaMensajeRepository tutoriaMensajeRepository;
     private final UsuarioRepository usuarioRepository;
+    private final AnteproyectoRepository anteproyectoRepository;
 
     @Value("${app.upload.dir.tutorias:uploads/tutorias}")
     private String uploadDir;
 
+    @Value("${app.upload.dir:uploads/anteproyectos}")
+    private String uploadDirAnteproyectos;
+
     public TutoriaServiceImpl(TutorRepository tutorRepository,
                               TutoriaFaseRepository tutoriaFaseRepository,
                               TutoriaMensajeRepository tutoriaMensajeRepository,
-                              UsuarioRepository usuarioRepository) {
+                              UsuarioRepository usuarioRepository,
+                              AnteproyectoRepository anteproyectoRepository) {
         this.tutorRepository = tutorRepository;
         this.tutoriaFaseRepository = tutoriaFaseRepository;
         this.tutoriaMensajeRepository = tutoriaMensajeRepository;
         this.usuarioRepository = usuarioRepository;
+        this.anteproyectoRepository = anteproyectoRepository;
     }
 
     // ── Resumen ───────────────────────────────────────────────────────────────
@@ -220,7 +226,7 @@ public class TutoriaServiceImpl implements TutoriaService {
                 .build();
         tutoriaMensajeRepository.save(mensajeAprobacion);
 
-        // Si las 3 fases están APROBADAS, marcar tutor como COMPLETADA
+        // Si las 3 fases están APROBADAS, marcar tutor como COMPLETADA y actualizar el Anteproyecto
         Long tutorId = fase.getTutor().getId();
         long totalFases = tutoriaFaseRepository.countByTutorId(tutorId);
         long fasesAprobadas = tutoriaFaseRepository.countByTutorIdAndEstado(tutorId, "APROBADA");
@@ -228,6 +234,34 @@ public class TutoriaServiceImpl implements TutoriaService {
             Tutor tutor = fase.getTutor();
             tutor.setEstado("COMPLETADA");
             tutorRepository.save(tutor);
+
+            // Reemplazar el PDF del Anteproyecto con el PDF final aprobado de la Fase 3
+            TutoriaFase fase3 = tutoriaFaseRepository.findByTutorIdOrderByNumeroFaseAsc(tutorId)
+                    .stream()
+                    .filter(f -> f.getNumeroFase() == 3)
+                    .findFirst()
+                    .orElseThrow(() -> new RuntimeException("Fase 3 no encontrada"));
+
+            // Copiar físicamente el PDF de la Fase 3 a la carpeta de anteproyectos
+            Path origen = Paths.get(uploadDir, tutorId.toString(), "fase_3", fase3.getArchivoPdfEstudiante());
+            Path destDir = Paths.get(uploadDirAnteproyectos);
+            Path destino = destDir.resolve(fase3.getArchivoPdfEstudiante());
+            try {
+                Files.createDirectories(destDir);
+                Files.copy(origen, destino, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                throw new RuntimeException("No se pudo copiar el PDF de la Fase 3 al directorio de anteproyectos", e);
+            }
+
+            anteproyectoRepository.findBySolicitudId(tutor.getSolicitud().getId())
+                    .ifPresent(anteproyecto -> {
+                        anteproyecto.setArchivoPdf(fase3.getArchivoPdfEstudiante());
+                        anteproyecto.setSha256Hash(fase3.getSha256Pdf());
+                        anteproyecto.setTamanoBytes(fase3.getTamanoPdfBytes());
+                        anteproyecto.setEstado("APROBADO");
+                        anteproyecto.setObservaciones("PDF final aprobado tras completar las 3 fases de tutoría");
+                        anteproyectoRepository.save(anteproyecto);
+                    });
         }
 
         return mapFaseConMensajes(fase);
