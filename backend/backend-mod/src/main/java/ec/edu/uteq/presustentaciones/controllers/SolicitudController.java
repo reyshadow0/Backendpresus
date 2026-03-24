@@ -97,6 +97,19 @@ public class SolicitudController {
         }
     }
 
+    @PostMapping("/suspender/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> suspender(
+            @PathVariable Long id,
+            @RequestBody Map<String, String> body) {
+        try {
+            String motivo = body.get("motivo");
+            return ResponseEntity.ok(solicitudService.suspenderSolicitud(id, motivo));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("error", e.getMessage()));
+        }
+    }
+
     /** Solo ADMIN y DOCENTE pueden ver TODAS las solicitudes */
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'DOCENTE')")

@@ -4,6 +4,7 @@ import ec.edu.uteq.presustentaciones.dto.TutoriaFaseDTO;
 import ec.edu.uteq.presustentaciones.dto.TutoriaMensajeDTO;
 import ec.edu.uteq.presustentaciones.dto.TutoriaResumenDTO;
 import ec.edu.uteq.presustentaciones.entities.*;
+import ec.edu.uteq.presustentaciones.enums.EstadoSolicitud;
 import ec.edu.uteq.presustentaciones.repositories.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -132,6 +133,11 @@ public class TutoriaServiceImpl implements TutoriaService {
         Long estudianteUsuarioReal = fase.getTutor().getSolicitud().getEstudiante().getUsuario().getId();
         if (!estudianteUsuarioReal.equals(estudianteUsuarioId)) {
             throw new RuntimeException("No autorizado");
+        }
+
+        Solicitud solicitud = fase.getTutor().getSolicitud();
+        if ("SUSPENDIDA".equals(solicitud.getEstado())) {
+            throw new RuntimeException("No puedes subir más archivos. Este tema ha sido suspendido por: " + solicitud.getMotivoSuspension());
         }
 
         if (!"PENDIENTE_ESTUDIANTE".equals(fase.getEstado())) {
@@ -360,6 +366,8 @@ public class TutoriaServiceImpl implements TutoriaService {
         String nombreTutor = tutor.getDocente().getUsuario().getNombre()
                 + " " + tutor.getDocente().getUsuario().getApellido();
 
+        boolean solicitudSuspendida = solicitud.getEstado() == EstadoSolicitud.SUSPENDIDA;
+
         return TutoriaResumenDTO.builder()
                 .tutorId(tutorId)
                 .solicitudId(solicitud.getId())
@@ -370,6 +378,7 @@ public class TutoriaServiceImpl implements TutoriaService {
                 .fasesAprobadas(fasesAprobadas)
                 .estadoTutoria(tutor.getEstado())
                 .mensajesNoLeidos(mensajesNoLeidos)
+                .solicitudSuspendida(solicitudSuspendida)
                 .build();
     }
 

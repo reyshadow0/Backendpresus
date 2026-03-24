@@ -2,6 +2,7 @@ package ec.edu.uteq.presustentaciones.entities;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import ec.edu.uteq.presustentaciones.enums.EstadoSolicitud;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -52,8 +53,15 @@ public class Solicitud {
     @Column(name = "actualizado_en", nullable = false)
     private LocalDateTime actualizadoEn;
 
+    @Enumerated(EnumType.STRING)
     @Column(name = "estado", nullable = false, length = 30)
-    private String estado = "PENDIENTE";
+    private EstadoSolicitud estado = EstadoSolicitud.CREADA;
+
+    @Column(name = "motivo_suspension", columnDefinition = "TEXT")
+    private String motivoSuspension;
+
+    @Column(name = "suspendido_en")
+    private LocalDateTime suspendidoEn;
 
     @PrePersist
     protected void onCreate() {

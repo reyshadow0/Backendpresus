@@ -3,12 +3,14 @@ package ec.edu.uteq.presustentaciones.services;
 import ec.edu.uteq.presustentaciones.entities.Docente;
 import ec.edu.uteq.presustentaciones.entities.Solicitud;
 import ec.edu.uteq.presustentaciones.entities.Tutor;
+import ec.edu.uteq.presustentaciones.enums.EstadoSolicitud;
 import ec.edu.uteq.presustentaciones.repositories.DocenteRepository;
 import ec.edu.uteq.presustentaciones.repositories.SolicitudRepository;
 import ec.edu.uteq.presustentaciones.repositories.TutorRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -24,6 +26,7 @@ public class TutorServiceImpl implements TutorService {
     private final NotificacionService notificacionService;
 
     @Override
+    @Transactional
     public Tutor asignarTutor(Long solicitudId, Long docenteId) {
         Solicitud solicitud = solicitudRepository.findById(solicitudId)
                 .orElseThrow(() -> new RuntimeException("Solicitud no encontrada: " + solicitudId));
@@ -38,6 +41,9 @@ public class TutorServiceImpl implements TutorService {
                 .estado("ACTIVO")
                 .build();
         Tutor guardado = tutorRepository.save(tutor);
+
+        solicitud.setEstado(EstadoSolicitud.TUTORIA);
+        solicitudRepository.save(solicitud);
 
         // Notificar al docente asignado
         try {
@@ -54,7 +60,7 @@ public class TutorServiceImpl implements TutorService {
         // Notificar al estudiante
         try {
             notificacionService.crearNotificacion(solicitud.getEstudiante().getUsuario().getId(),
-                    String.format("🎓 El docente %s %s ha sido asignado como tu tutor para \"%s\".",
+                    String.format("🎓 El docente %s %s ha sido asignado como tu tutor para \"%s\". Tu solicitud ahora está en fase de tutoría.",
                             docente.getUsuario().getNombre(),
                             docente.getUsuario().getApellido(),
                             solicitud.getTituloTema()));

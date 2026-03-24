@@ -48,6 +48,9 @@ public class Evaluacion {
     @Column(name = "observaciones", columnDefinition = "TEXT")
     private String observaciones;
 
+    @Column(name = "comentario_preestablecido", columnDefinition = "TEXT")
+    private String comentarioPreestablecido;
+
     @OneToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "solicitud_id")
     @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "creadoPor", "actualizadoPor"})

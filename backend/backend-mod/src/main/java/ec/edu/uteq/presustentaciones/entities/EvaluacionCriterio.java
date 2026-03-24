@@ -9,7 +9,8 @@ import java.time.LocalDateTime;
 /**
  * Registra la nota que un JURADO asigna a UN criterio de la rúbrica
  * para una solicitud específica.
- * Escalas válidas: 100, 67, 33, 0  (% del puntaje máximo del criterio)
+ * Escala: 1-100 (% del puntaje máximo del criterio)
+ * Rangos de observación: 67-100 (Alto), 34-66 (Medio), 1-33 (Bajo)
  */
 @Entity
 @Table(name = "evaluaciones_criterio",
@@ -22,13 +23,21 @@ public class EvaluacionCriterio {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** Escala aplicada: 100, 67, 33 o 0 */
+    /** Escala aplicada: 1-100 (% del puntaje máximo del criterio) */
     @Column(name = "escala", nullable = false)
     private Integer escala;
 
     /** Nota calculada = criterio.ponderacion * escala / 100  (sobre la base del criterio) */
     @Column(name = "nota_obtenida", nullable = false)
     private Double notaObtenida;
+
+    /** Observación automática según el rango de la escala */
+    @Column(name = "observacion_auto", columnDefinition = "TEXT")
+    private String observacionAuto;
+
+    /** Observación manual ingresada por el jurado */
+    @Column(name = "observacion_manual", columnDefinition = "TEXT")
+    private String observacionManual;
 
     @Column(name = "observaciones", columnDefinition = "TEXT")
     private String observaciones;
@@ -57,11 +66,23 @@ public class EvaluacionCriterio {
         registradoEn = LocalDateTime.now();
     }
 
-    /** Escalas válidas según la rúbrica institucional */
-    public static final int[] ESCALAS_VALIDAS = {100, 67, 33, 0};
+    public static String getObservacionPorRango(int escala) {
+        if (escala >= 67) {
+            return "Excelente. Cumple satisfactoriamente con los requisitos y objetivos del criterio establecido.";
+        } else if (escala >= 34) {
+            return "Aceptable. Presenta algunas deficiencias que requieren corrección o mejora.";
+        } else {
+            return "Deficiente. No cumple con los requisitos mínimos del criterio. Se evidencian falencias significativas.";
+        }
+    }
 
-    public static boolean esEscalaValida(int escala) {
-        for (int e : ESCALAS_VALIDAS) if (e == escala) return true;
-        return false;
+    public static String getRangoDescripcion(int escala) {
+        if (escala >= 67) {
+            return "ALTO";
+        } else if (escala >= 34) {
+            return "MEDIO";
+        } else {
+            return "BAJO";
+        }
     }
 }

@@ -4,6 +4,7 @@ import ec.edu.uteq.presustentaciones.entities.Docente;
 import ec.edu.uteq.presustentaciones.entities.Jurado;
 import ec.edu.uteq.presustentaciones.entities.Solicitud;
 import ec.edu.uteq.presustentaciones.entities.Tutor;
+import ec.edu.uteq.presustentaciones.enums.EstadoSolicitud;
 import ec.edu.uteq.presustentaciones.repositories.DocenteRepository;
 import ec.edu.uteq.presustentaciones.repositories.JuradoRepository;
 import ec.edu.uteq.presustentaciones.repositories.SolicitudRepository;
@@ -68,6 +69,10 @@ public class JuradoServiceImpl implements JuradoService {
 
         Jurado guardado = crearJuradoSinNotificar(solicitud, docente, rol);
 
+        // Cambiar estado a EVALUACION
+        solicitud.setEstado(EstadoSolicitud.EVALUACION);
+        solicitudRepository.save(solicitud);
+
         // Notificar al docente asignado como jurado
         notificarDocenteJurado(docente, solicitud, rol);
 
@@ -118,6 +123,10 @@ public class JuradoServiceImpl implements JuradoService {
         // Re-fetch tras save para garantizar que todas las asociaciones estén cargadas
         Tutor guardado = tutorRepository.findById(tutorRepository.save(tutor).getId())
                 .orElseThrow(() -> new RuntimeException("Error al recuperar el tutor guardado"));
+
+        // Cambiar estado a TUTORIA
+        solicitud.setEstado(EstadoSolicitud.TUTORIA);
+        solicitudRepository.save(solicitud);
 
         // Notificar al docente asignado como tutor
         notificarDocenteTutor(docente, solicitud);
@@ -200,6 +209,10 @@ public class JuradoServiceImpl implements JuradoService {
             notificarDocenteJurado(docente, solicitud, rol);  // cada docente es destinatario distinto
         }
 
+        // Cambiar estado a EVALUACION
+        solicitud.setEstado(EstadoSolicitud.EVALUACION);
+        solicitudRepository.save(solicitud);
+
         // Una sola notificación + correo agrupado al estudiante
         List<Jurado> todosJurados = juradoRepository.findBySolicitudId(solicitudId);
         notificarEstudianteTribunalCompleto(solicitud, todosJurados);
@@ -213,6 +226,11 @@ public class JuradoServiceImpl implements JuradoService {
     @Override
     public List<Tutor> listarTutoriasPorDocente(Long docenteId) {
         return tutorRepository.findByDocenteId(docenteId);
+    }
+
+    @Override
+    public Optional<Jurado> obtenerInfoJurado(Long solicitudId, Long usuarioId) {
+        return juradoRepository.findBySolicitudIdAndUsuarioId(solicitudId, usuarioId);
     }
 
     // ── Helpers internos ─────────────────────────────────────────────────────
@@ -244,7 +262,7 @@ public class JuradoServiceImpl implements JuradoService {
 
             String mensaje = String.format(
                     "⚖️ Se ha asignado tu tribunal completo para tu pre-sustentación \"%s\". " +
-                    "Presidente: %s, Vocal 1: %s, Vocal 2: %s.",
+                    "Presidente: %s, Vocal 1: %s, Vocal 2: %s. Tu solicitud ahora está en fase de evaluación.",
                     solicitud.getTituloTema(), presidente, vocal1, vocal2);
 
             Long estudianteUsuarioId = solicitud.getEstudiante().getUsuario().getId();
@@ -318,7 +336,7 @@ public class JuradoServiceImpl implements JuradoService {
         try {
             notificacionService.crearNotificacion(solicitud.getEstudiante().getUsuario().getId(),
                     String.format("🎓 El docente %s %s ha sido asignado como tu tutor para el anteproyecto \"%s\". " +
-                                    "Puedes ponerte en contacto con él a través del sistema.",
+                                    "Tu solicitud ahora está en fase de tutoría. Puedes ponerte en contacto con él a través del sistema.",
                             docente.getUsuario().getNombre(),
                             docente.getUsuario().getApellido(),
                             solicitud.getTituloTema()));

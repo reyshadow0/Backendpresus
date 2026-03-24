@@ -18,11 +18,13 @@ import ec.edu.uteq.presustentaciones.entities.Acta;
 import ec.edu.uteq.presustentaciones.entities.Evaluacion;
 import ec.edu.uteq.presustentaciones.entities.Jurado;
 import ec.edu.uteq.presustentaciones.entities.Solicitud;
+import ec.edu.uteq.presustentaciones.enums.EstadoSolicitud;
 import ec.edu.uteq.presustentaciones.repositories.ActaRepository;
 import ec.edu.uteq.presustentaciones.repositories.EvaluacionRepository;
 import ec.edu.uteq.presustentaciones.repositories.JuradoRepository;
 import ec.edu.uteq.presustentaciones.repositories.SolicitudRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -38,6 +40,7 @@ import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ActaServiceImpl implements ActaService {
 
     private final ActaRepository actaRepository;
@@ -103,13 +106,19 @@ public class ActaServiceImpl implements ActaService {
 
         acta.actualizarEstadoFirma();
 
-        // Si el acta quedó completamente firmada, regenerar PDF con marcas de firma
-        if (acta.isFirmada() && acta.getArchivoPdf() != null) {
+        // Si el acta quedó completamente firmada, cambiar estado a COMPLETADA y regenerar PDF
+        if (acta.isFirmada()) {
             Solicitud solicitud = acta.getSolicitud();
-            Optional<Evaluacion> evalOpt = evaluacionRepository.findBySolicitudId(solicitud.getId());
-            List<Jurado> jurados = juradoRepository.findBySolicitudId(solicitud.getId());
-            String rutaCompleta = actasDir + "/" + acta.getArchivoPdf();
-            generarPdf(rutaCompleta, solicitud, evalOpt.orElse(null), jurados, acta);
+            solicitud.setEstado(EstadoSolicitud.COMPLETADA);
+            solicitudRepository.save(solicitud);
+            log.info("Solicitud {} completada - todas las firmas del acta han sido aplicadas", solicitud.getId());
+
+            if (acta.getArchivoPdf() != null) {
+                Optional<Evaluacion> evalOpt = evaluacionRepository.findBySolicitudId(solicitud.getId());
+                List<Jurado> jurados = juradoRepository.findBySolicitudId(solicitud.getId());
+                String rutaCompleta = actasDir + "/" + acta.getArchivoPdf();
+                generarPdf(rutaCompleta, solicitud, evalOpt.orElse(null), jurados, acta);
+            }
         }
 
         return actaRepository.save(acta);

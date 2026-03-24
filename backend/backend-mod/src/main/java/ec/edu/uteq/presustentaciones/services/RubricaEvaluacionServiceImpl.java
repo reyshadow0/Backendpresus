@@ -3,6 +3,7 @@ package ec.edu.uteq.presustentaciones.services;
 import ec.edu.uteq.presustentaciones.dto.EscalaCriterioDTO;
 import ec.edu.uteq.presustentaciones.dto.EvaluacionRubricaRequest;
 import ec.edu.uteq.presustentaciones.dto.EvaluacionRubricaResponse;
+import ec.edu.uteq.presustentaciones.dto.ObservacionesSolicitudDTO;
 import ec.edu.uteq.presustentaciones.entities.*;
 import ec.edu.uteq.presustentaciones.repositories.*;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,9 @@ public class RubricaEvaluacionServiceImpl implements RubricaEvaluacionService {
     private final JuradoRepository juradoRepo;
     private final SolicitudRepository solicitudRepo;
     private final RubricaRepository rubricaRepo;
+    private final TutorRepository tutorRepo;
+    private final EvaluacionRepository evaluacionRepo;
+    private final EvaluacionJuradoRepository evaluacionJuradoRepo;
 
     @Override
     @Transactional
@@ -47,8 +51,8 @@ public class RubricaEvaluacionServiceImpl implements RubricaEvaluacionService {
             throw new RuntimeException("Debe evaluar todos los " + criterios.size() + " criterios de la rúbrica.");
         }
         for (EscalaCriterioDTO c : req.getCriterios()) {
-            if (!EvaluacionCriterio.esEscalaValida(c.getEscala())) {
-                throw new RuntimeException("Escala inválida: " + c.getEscala() + ". Use: 100, 67, 33 o 0.");
+            if (c.getEscala() < 1 || c.getEscala() > 100) {
+                throw new RuntimeException("Escala inválida: " + c.getEscala() + ". Use valores entre 1 y 100.");
             }
         }
 
@@ -63,6 +67,7 @@ public class RubricaEvaluacionServiceImpl implements RubricaEvaluacionService {
                     .orElseThrow(() -> new RuntimeException("Criterio no encontrado: " + cDto.getCriterioId()));
 
             double notaObtenida = Math.round(criterio.getPonderacion() * cDto.getEscala() / 100.0 * 100.0) / 100.0;
+            String observacionAuto = EvaluacionCriterio.getObservacionPorRango(cDto.getEscala());
 
             EvaluacionCriterio ec = EvaluacionCriterio.builder()
                     .solicitud(solicitud)
@@ -70,6 +75,8 @@ public class RubricaEvaluacionServiceImpl implements RubricaEvaluacionService {
                     .criterio(criterio)
                     .escala(cDto.getEscala())
                     .notaObtenida(notaObtenida)
+                    .observacionAuto(observacionAuto)
+                    .observacionManual(cDto.getObservacionManual())
                     .observaciones(cDto.getObservaciones())
                     .build();
             guardadas.add(evalCriterioRepo.save(ec));
@@ -128,7 +135,10 @@ public class RubricaEvaluacionServiceImpl implements RubricaEvaluacionService {
                         .nombreCriterio(ec.getCriterio().getNombre())
                         .ponderacion(ec.getCriterio().getPonderacion())
                         .escala(ec.getEscala())
+                        .rangoDescripcion(EvaluacionCriterio.getRangoDescripcion(ec.getEscala()))
                         .notaObtenida(ec.getNotaObtenida())
+                        .observacionAuto(ec.getObservacionAuto())
+                        .observacionManual(ec.getObservacionManual())
                         .observaciones(ec.getObservaciones())
                         .build())
                 .collect(Collectors.toList());
@@ -153,6 +163,97 @@ public class RubricaEvaluacionServiceImpl implements RubricaEvaluacionService {
                 .notaTotalJurado(evals.isEmpty() ? null : notaTotal)
                 .notaPromedioTribunal(notaPromedio)
                 .tribunalCompleto(completo)
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ObservacionesSolicitudDTO obtenerObservacionesSolicitud(Long solicitudId) {
+        Solicitud solicitud = solicitudRepo.findById(solicitudId)
+                .orElseThrow(() -> new RuntimeException("Solicitud no encontrada: " + solicitudId));
+
+        String nombreEstudiante = "";
+        if (solicitud.getEstudiante() != null && solicitud.getEstudiante().getUsuario() != null) {
+            nombreEstudiante = solicitud.getEstudiante().getUsuario().getNombre() + " " 
+                    + solicitud.getEstudiante().getUsuario().getApellido();
+        }
+
+        ObservacionesSolicitudDTO.ObservacionesTutorDTO tutorDTO = null;
+        var tutorOpt = tutorRepo.findBySolicitudId(solicitudId);
+        if (tutorOpt.isPresent()) {
+            Tutor tutor = tutorOpt.get();
+            String nombreTutor = tutor.getDocente() != null && tutor.getDocente().getUsuario() != null
+                    ? tutor.getDocente().getUsuario().getNombre() + " " + tutor.getDocente().getUsuario().getApellido()
+                    : "Tutor";
+            String fechaRegistro = tutor.getFechaAsignacion() != null
+                    ? tutor.getFechaAsignacion().toString() : null;
+            tutorDTO = ObservacionesSolicitudDTO.ObservacionesTutorDTO.builder()
+                    .tutorId(tutor.getId())
+                    .nombreTutor(nombreTutor)
+                    .observaciones(tutor.getObservaciones())
+                    .fechaRegistro(fechaRegistro)
+                    .build();
+        }
+
+        List<ObservacionesSolicitudDTO.ObservacionesJuradoDTO> juradosDTO = new ArrayList<>();
+        List<Jurado> jurados = juradoRepo.findBySolicitudId(solicitudId);
+        
+        List<EvaluacionJurado> evaluacionesJurado = evaluacionJuradoRepo.findBySolicitudId(solicitudId);
+        
+        for (Jurado jurado : jurados) {
+            String nombreJurado = jurado.getDocente() != null && jurado.getDocente().getUsuario() != null
+                    ? jurado.getDocente().getUsuario().getNombre() + " " + jurado.getDocente().getUsuario().getApellido()
+                    : "Docente";
+            
+            EvaluacionJurado evalJurado = evaluacionesJurado.stream()
+                    .filter(e -> e.getJurado().getId().equals(jurado.getId()))
+                    .findFirst()
+                    .orElse(null);
+            
+            List<EvaluacionCriterio> criterios = evalCriterioRepo.findBySolicitudIdAndJuradoId(solicitudId, jurado.getId());
+            List<ObservacionesSolicitudDTO.CriterioObservacionDTO> criteriosDTO = criterios.stream()
+                    .map(ec -> ObservacionesSolicitudDTO.CriterioObservacionDTO.builder()
+                            .nombreCriterio(ec.getCriterio().getNombre())
+                            .ponderacion(ec.getCriterio().getPonderacion())
+                            .escala(ec.getEscala())
+                            .rangoDescripcion(EvaluacionCriterio.getRangoDescripcion(ec.getEscala()))
+                            .notaObtenida(ec.getNotaObtenida())
+                            .observacionAuto(ec.getObservacionAuto())
+                            .observacionManual(ec.getObservacionManual())
+                            .build())
+                    .collect(Collectors.toList());
+            
+            juradosDTO.add(ObservacionesSolicitudDTO.ObservacionesJuradoDTO.builder()
+                    .juradoId(jurado.getId())
+                    .nombreJurado(nombreJurado)
+                    .rol(jurado.getRol())
+                    .criterios(criteriosDTO)
+                    .notaJurado(evalJurado != null ? evalJurado.getNotaJurado() : null)
+                    .observaciones(evalJurado != null ? evalJurado.getObservaciones() : null)
+                    .resultado(evalJurado != null ? evalJurado.getResultado() : null)
+                    .comentarioPreestablecido(evalJurado != null ? evalJurado.getComentarioPreestablecido() : null)
+                    .build());
+        }
+
+        ObservacionesSolicitudDTO.ObservacionesCoordinadorDTO coordinadorDTO = null;
+        var evaluacionOpt = evaluacionRepo.findBySolicitudId(solicitudId);
+        if (evaluacionOpt.isPresent()) {
+            Evaluacion ev = evaluacionOpt.get();
+            coordinadorDTO = ObservacionesSolicitudDTO.ObservacionesCoordinadorDTO.builder()
+                    .observaciones(ev.getObservaciones())
+                    .notaInstructor(ev.getNotaInstructor())
+                    .notaFinal(ev.getNotaFinal())
+                    .resultado(ev.getResultado())
+                    .build();
+        }
+
+        return ObservacionesSolicitudDTO.builder()
+                .solicitudId(solicitudId)
+                .tituloTema(solicitud.getTituloTema())
+                .nombreEstudiante(nombreEstudiante)
+                .tutor(tutorDTO)
+                .jurados(juradosDTO)
+                .coordinador(coordinadorDTO)
                 .build();
     }
 }

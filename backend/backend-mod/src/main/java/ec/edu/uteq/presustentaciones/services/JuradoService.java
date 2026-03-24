@@ -27,4 +27,5 @@ public interface JuradoService {
     // ── Vista del docente ─────────────────────────────────────────────────────
     List<Jurado> listarPorDocente(Long docenteId);
     List<Tutor> listarTutoriasPorDocente(Long docenteId);
+    Optional<Jurado> obtenerInfoJurado(Long solicitudId, Long usuarioId);
 }

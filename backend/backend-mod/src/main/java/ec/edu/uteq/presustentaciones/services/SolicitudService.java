@@ -15,4 +15,5 @@ public interface SolicitudService {
     List<Solicitud> listarPorEstudiante(Long estudianteId);
     List<Solicitud> listarPorUsuario(Long usuarioId);
     Optional<Solicitud> obtenerPorId(Long id);
+    Solicitud suspenderSolicitud(Long solicitudId, String motivo);
 }

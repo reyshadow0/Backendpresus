@@ -15,4 +15,5 @@ public class TutoriaResumenDTO {
     private long fasesAprobadas;
     private String estadoTutoria;
     private long mensajesNoLeidos;
+    private boolean solicitudSuspendida;
 }

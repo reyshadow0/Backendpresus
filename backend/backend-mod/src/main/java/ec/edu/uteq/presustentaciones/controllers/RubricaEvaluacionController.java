@@ -2,6 +2,7 @@ package ec.edu.uteq.presustentaciones.controllers;
 
 import ec.edu.uteq.presustentaciones.dto.EvaluacionRubricaRequest;
 import ec.edu.uteq.presustentaciones.dto.EvaluacionRubricaResponse;
+import ec.edu.uteq.presustentaciones.dto.ObservacionesSolicitudDTO;
 import ec.edu.uteq.presustentaciones.entities.CriterioRubrica;
 import ec.edu.uteq.presustentaciones.repositories.CriterioRubricaRepository;
 import ec.edu.uteq.presustentaciones.services.RubricaEvaluacionService;
@@ -65,5 +66,16 @@ public class RubricaEvaluacionController {
     @GetMapping("/criterios/{rubricaId}")
     public List<CriterioRubrica> criteriosPorRubrica(@PathVariable Long rubricaId) {
         return criterioRepo.findByRubricaIdOrderByOrdenAsc(rubricaId);
+    }
+
+    /** Obtener todas las observaciones de una solicitud (tutor, jurados, coordinador) */
+    @GetMapping("/observaciones/{solicitudId}")
+    public ResponseEntity<?> obtenerObservaciones(@PathVariable Long solicitudId) {
+        try {
+            ObservacionesSolicitudDTO obs = service.obtenerObservacionesSolicitud(solicitudId);
+            return ResponseEntity.ok(obs);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 }

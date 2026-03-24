@@ -3,6 +3,7 @@ package ec.edu.uteq.presustentaciones.services;
 import ec.edu.uteq.presustentaciones.entities.Estudiante;
 import ec.edu.uteq.presustentaciones.entities.Solicitud;
 import ec.edu.uteq.presustentaciones.entities.Usuario;
+import ec.edu.uteq.presustentaciones.enums.EstadoSolicitud;
 import ec.edu.uteq.presustentaciones.repositories.AnteproyectoRepository;
 import ec.edu.uteq.presustentaciones.repositories.EstudianteRepository;
 import ec.edu.uteq.presustentaciones.repositories.SolicitudRepository;
@@ -57,7 +58,7 @@ public class SolicitudServiceImpl implements SolicitudService {
     public Solicitud crearSolicitud(Long estudianteId, Solicitud datos) {
         Estudiante estudiante = estudianteRepository.findById(estudianteId)
                 .orElseThrow(() -> new RuntimeException("Estudiante no encontrado con ID: " + estudianteId));
-        datos.setEstado("CREADA");
+        datos.setEstado(EstadoSolicitud.CREADA);
         datos.setEstudiante(estudiante);
         datos.setCreadoPor(estudiante.getUsuario());
         datos.setActualizadoPor(estudiante.getUsuario());
@@ -95,7 +96,7 @@ public class SolicitudServiceImpl implements SolicitudService {
             throw new RuntimeException("Debes cargar el PDF del anteproyecto antes de enviar la solicitud a revisión.");
         }
 
-        s.setEstado("ENVIADA");
+        s.setEstado(EstadoSolicitud.ENVIADA);
         Solicitud guardada = solicitudRepository.save(s);
 
         String nombreEstudiante = s.getEstudiante().getUsuario().getNombre()
@@ -113,7 +114,7 @@ public class SolicitudServiceImpl implements SolicitudService {
     public Solicitud aprobarSolicitud(Long solicitudId) {
         Solicitud s = solicitudRepository.findById(solicitudId)
                 .orElseThrow(() -> new RuntimeException("Solicitud no encontrada"));
-        s.setEstado("APROBADA");
+        s.setEstado(EstadoSolicitud.APROBADA);
         Solicitud guardada = solicitudRepository.save(s);
 
         notificarEstudiante(s, String.format(
@@ -134,7 +135,7 @@ public class SolicitudServiceImpl implements SolicitudService {
     public Solicitud rechazarConObservacion(Long solicitudId, String observacion) {
         Solicitud s = solicitudRepository.findById(solicitudId)
                 .orElseThrow(() -> new RuntimeException("Solicitud no encontrada"));
-        s.setEstado("RECHAZADA");
+        s.setEstado(EstadoSolicitud.RECHAZADA);
         if (observacion != null && !observacion.isBlank()) {
             s.setObservaciones(observacion);
         }
@@ -162,5 +163,33 @@ public class SolicitudServiceImpl implements SolicitudService {
     @Override
     public Optional<Solicitud> obtenerPorId(Long id) {
         return solicitudRepository.findById(id);
+    }
+
+    @Override
+    @Transactional
+    public Solicitud suspenderSolicitud(Long solicitudId, String motivo) {
+        Solicitud s = solicitudRepository.findById(solicitudId)
+                .orElseThrow(() -> new RuntimeException("Solicitud no encontrada"));
+
+        if (!s.getEstado().esSuspendible()) {
+            throw new RuntimeException("La solicitud no puede ser suspendida en su estado actual: " + s.getEstado());
+        }
+
+        if (motivo == null || motivo.isBlank()) {
+            throw new RuntimeException("Debe especificar el motivo de la suspensión");
+        }
+
+        s.setEstado(EstadoSolicitud.SUSPENDIDA);
+        s.setMotivoSuspension(motivo);
+        s.setSuspendidoEn(LocalDateTime.now());
+
+        Solicitud guardada = solicitudRepository.save(s);
+        log.info("Solicitud {} suspendida desde estado {} por motivo: {}", solicitudId, s.getEstado(), motivo);
+
+        notificarEstudiante(s, String.format(
+                "🚫 Tu trabajo \"%s\" ha sido SUSPENDIDO. Motivo: %s. No podrás continuar.",
+                s.getTituloTema(), motivo));
+
+        return guardada;
     }
 }

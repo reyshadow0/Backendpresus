@@ -25,7 +25,10 @@ public class EvaluacionRubricaResponse {
         private String nombreCriterio;
         private Double ponderacion;
         private Integer escala;
+        private String rangoDescripcion;
         private Double notaObtenida;
+        private String observacionAuto;
+        private String observacionManual;
         private String observaciones;
     }
 }

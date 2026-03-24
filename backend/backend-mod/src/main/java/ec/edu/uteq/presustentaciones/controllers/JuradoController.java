@@ -119,4 +119,23 @@ public class JuradoController {
     public List<Tutor> listarTutoriasPorDocente(@PathVariable Long docenteId) {
         return juradoService.listarTutoriasPorDocente(docenteId);
     }
+
+    @GetMapping("/info/{solicitudId}/{usuarioId}")
+    public ResponseEntity<?> obtenerInfoJurado(@PathVariable Long solicitudId, @PathVariable Long usuarioId) {
+        return juradoService.obtenerInfoJurado(solicitudId, usuarioId)
+                .map(jurado -> {
+                    String nombreDocente = "";
+                    if (jurado.getDocente() != null && jurado.getDocente().getUsuario() != null) {
+                        nombreDocente = jurado.getDocente().getUsuario().getNombre() + " " 
+                                + jurado.getDocente().getUsuario().getApellido();
+                    }
+                    return ResponseEntity.ok(Map.of(
+                            "id", jurado.getId(),
+                            "rol", jurado.getRol(),
+                            "confirmado", jurado.isConfirmado(),
+                            "nombreDocente", nombreDocente
+                    ));
+                })
+                .orElse(ResponseEntity.ok(null));
+    }
 }

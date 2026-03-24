@@ -51,6 +51,10 @@ public class AnteproyectoServiceImpl implements AnteproyectoService {
         Solicitud solicitud = solicitudRepository.findById(solicitudId)
                 .orElseThrow(() -> new RuntimeException("Solicitud no encontrada"));
 
+        if ("SUSPENDIDA".equals(solicitud.getEstado())) {
+            throw new RuntimeException("Tu trabajo ha sido suspendido y no puedes subir archivos. Motivo: " + solicitud.getMotivoSuspension());
+        }
+
         Path dirPath = Paths.get(uploadDir);
         try { Files.createDirectories(dirPath); } catch (IOException e) {
             throw new RuntimeException("No se pudo crear el directorio de uploads", e);

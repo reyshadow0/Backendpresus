@@ -3,12 +3,14 @@ package ec.edu.uteq.presustentaciones.services;
 import ec.edu.uteq.presustentaciones.entities.Evaluacion;
 import ec.edu.uteq.presustentaciones.entities.Rubrica;
 import ec.edu.uteq.presustentaciones.entities.Solicitud;
+import ec.edu.uteq.presustentaciones.enums.EstadoSolicitud;
 import ec.edu.uteq.presustentaciones.repositories.EvaluacionRepository;
 import ec.edu.uteq.presustentaciones.repositories.RubricaRepository;
 import ec.edu.uteq.presustentaciones.repositories.SolicitudRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -24,6 +26,7 @@ public class EvaluacionServiceImpl implements EvaluacionService {
     private final NotificacionService notificacionService;
 
     @Override
+    @Transactional
     public Evaluacion evaluarSolicitud(Long solicitudId, Long rubricaId,
                                        Double notaInstructor, Double notaJurado,
                                        String observaciones,
@@ -54,7 +57,12 @@ public class EvaluacionServiceImpl implements EvaluacionService {
                 .build();
 
         e.calcularNotaFinal();
+        e.setComentarioPreestablecido(generarComentarioPorRango(e.getNotaFinal()));
         Evaluacion guardada = evaluacionRepository.save(e);
+
+        // Cambiar estado a CALIFICADA
+        solicitud.setEstado(EstadoSolicitud.CALIFICADA);
+        solicitudRepository.save(solicitud);
 
         notificarNotaFinal(solicitud, guardada);
 
@@ -62,6 +70,7 @@ public class EvaluacionServiceImpl implements EvaluacionService {
     }
 
     @Override
+    @Transactional
     public Evaluacion evaluarSolicitud(Long solicitudId, Long rubricaId,
                                        Double notaFinal, String observaciones) {
         Solicitud solicitud = solicitudRepository.findById(solicitudId)
@@ -75,7 +84,12 @@ public class EvaluacionServiceImpl implements EvaluacionService {
                 .pesoInstructor(60.0).pesoJurado(40.0)
                 .resultado(notaFinal >= 7 ? "APROBADO" : "REPROBADO")
                 .build();
+        e.setComentarioPreestablecido(generarComentarioPorRango(notaFinal));
         Evaluacion guardada = evaluacionRepository.save(e);
+
+        // Cambiar estado a CALIFICADA
+        solicitud.setEstado(EstadoSolicitud.CALIFICADA);
+        solicitudRepository.save(solicitud);
 
         notificarNotaFinal(solicitud, guardada);
 
@@ -102,6 +116,18 @@ public class EvaluacionServiceImpl implements EvaluacionService {
         return evaluacionRepository.findBySolicitudId(solicitudId);
     }
 
+
+    public String generarComentarioPorRango(Double notaFinal) {
+        if (notaFinal == null) return "";
+        if (notaFinal <= 3) {
+            return "El trabajo no cumple con los requisitos mínimos esperados. Se evidencian falencias significativas que requieren correcciones sustanciales.";
+        } else if (notaFinal <= 6) {
+            return "El trabajo presenta un nivel aceptable pero con aspectos que requieren mejoras o correcciones para alcanzar los estándares esperados.";
+        } else {
+            return "El trabajo cumple satisfactoriamente con los objetivos y requisitos establecidos, demostrando un desempeño adecuado.";
+        }
+    }
+
     // ── Notificación nota final ───────────────────────────────────────────────
 
     private void notificarNotaFinal(Solicitud solicitud, Evaluacion evaluacion) {
@@ -118,11 +144,11 @@ public class EvaluacionServiceImpl implements EvaluacionService {
             if (nota != null) {
                 msg = String.format(
                         "%s Tu pre-sustentación \"%s\" ha sido evaluada. " +
-                                "Nota final: %.2f / 10 — Resultado: %s.",
+                                "Nota final: %.2f / 10 — Resultado: %s. Tu solicitud ahora está en fase de calificación.",
                         emoji, titulo, nota, resultado);
             } else {
                 msg = String.format(
-                        "%s Tu pre-sustentación \"%s\" ha sido evaluada. Resultado: %s.",
+                        "%s Tu pre-sustentación \"%s\" ha sido evaluada. Resultado: %s. Tu solicitud ahora está en fase de calificación.",
                         emoji, titulo, resultado);
             }
 
